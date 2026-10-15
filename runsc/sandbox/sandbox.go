@@ -818,8 +818,19 @@ func (s *Sandbox) Execute(conf *config.Config, args *control.ExecArgs) (int32, e
 // Event retrieves stats about the sandbox such as memory and CPU utilization.
 func (s *Sandbox) Event(cid string) (*boot.EventOut, error) {
 	log.Debugf("Getting events for container %q in sandbox %q", cid, s.ID)
+	args := boot.EventArgs{CID: cid, HostConfigured: s.CgroupJSON.Cgroup != nil}
+	if args.HostConfigured {
+		if cgroup, err := s.NewCGroup(); err != nil {
+			log.Warningf("events: failed to find configured sandbox cgroup: %v", err)
+		} else if usage, err := cgroup.CPUUsage(); err != nil {
+			log.Warningf("events: failed to read configured sandbox cgroup CPU usage: %v", err)
+		} else {
+			args.HostCPU = usage
+			args.HostValid = true
+		}
+	}
 	var e boot.EventOut
-	if err := s.call(boot.ContMgrEvent, &cid, &e); err != nil {
+	if err := s.call(boot.ContMgrEvent, &args, &e); err != nil {
 		return nil, fmt.Errorf("retrieving event data from sandbox: %w", err)
 	}
 	return &e, nil

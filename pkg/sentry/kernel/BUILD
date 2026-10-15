@@ -255,6 +255,7 @@ go_library(
         "cgroup_mounts_mutex.go",
         "cgroup_mutex.go",
         "cgroup_v2_mutex.go",
+        "container_cpu.go",
         "context.go",
         "fd_table.go",
         "fd_table_mutex.go",
@@ -434,6 +435,7 @@ go_test(
     name = "kernel_test",
     size = "small",
     srcs = [
+        "container_cpu_test.go",
         "fd_table_test.go",
         "kernel_restore_test.go",
         "pending_signals_test.go",
@@ -464,6 +466,7 @@ go_test(
         "//pkg/sentry/time",
         "//pkg/sentry/usage",
         "//pkg/sentry/vfs",
+        "//pkg/state",
         "//pkg/sync",
         "//pkg/tcpip",
         "@org_golang_google_protobuf//proto:go_default_library",
