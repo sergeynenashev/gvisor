@@ -2984,17 +2984,53 @@ func TestMultiContainerEvent(t *testing.T) {
 					}
 				}
 
-				if name == "disableCgroups" {
-					// Without cgroups, sentry accounting only counts live thread groups.
-					if exited, ok := ret.ContainerUsage[containers[2].ID]; ok {
-						t.Errorf("Exited container should not report CPU usage, got: %d", exited)
+				// CPU used before the process exited must remain charged to its container.
+				if exited := ret.ContainerUsage[containers[2].ID]; exited == 0 {
+					t.Errorf("Exited container should retain non-zero CPU usage, got: %d", exited)
+				}
+			}
+
+			// Completed execs must keep their CPU charge in this still-live
+			// container after each process has been reaped.
+			before, err := containers[0].Event()
+			if err != nil {
+				t.Fatalf("Event before repeated execs: %v", err)
+			}
+			lastGuest := before.ContainerUsage[containers[0].ID]
+			lastCPU := before.Event.Data.CPU.Usage.Total
+			initialCPU := lastCPU
+			for round := 0; round < 2; round++ {
+				if ws, err := execute(conf, containers[0], quick[0], quick[1:]...); err != nil || ws != 0 {
+					t.Fatalf("CPU-burning exec %d: status=%v, err=%v", round, ws, err)
+				}
+				ret, err := containers[0].Event()
+				if err != nil {
+					t.Fatalf("Event after CPU-burning exec %d: %v", round, err)
+				}
+				guest := ret.ContainerUsage[containers[0].ID]
+				cpu := ret.Event.Data.CPU.Usage.Total
+				if guest <= lastGuest || cpu < lastCPU {
+					t.Fatalf("exec %d lost CPU: guest %d -> %d, exposed %d -> %d", round, lastGuest, guest, lastCPU, cpu)
+				}
+				if name == "enableCgroups" {
+					file := control.CgroupControlFile{Controller: "cpuacct", Path: "/" + containers[0].ID, Name: "cpuacct.usage"}
+					raw, err := containers[0].Sandbox.CgroupsReadControlFile(file)
+					if err != nil {
+						t.Fatalf("reading guest cpuacct after exec %d: %v", round, err)
 					}
-				} else {
-					// cpuacct.usage and cpu.stat accumulate CPU usage even after tasks exit.
-					if exited := ret.ContainerUsage[containers[2].ID]; exited == 0 {
-						t.Errorf("Exited container should report non-zero CPU usage, got: %d", exited)
+					usage, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
+					if err != nil || usage < guest {
+						t.Fatalf("guest cpuacct after exec %d = %q, Event guest=%d, parse err=%v", round, raw, guest, err)
 					}
 				}
+				lastGuest, lastCPU = guest, cpu
+			}
+			if lastCPU <= initialCPU {
+				t.Fatalf("completed execs did not increase exposed CPU: %d -> %d", initialCPU, lastCPU)
+			}
+			idle, err := containers[0].Event()
+			if err != nil || idle.Event.Data.CPU.Usage.Total < lastCPU {
+				t.Fatalf("idle Event lost completed exec CPU: event=%+v, err=%v", idle, err)
 			}
 
 			// Check that CPU reported by busy container is higher than sleep.
@@ -3025,6 +3061,19 @@ func TestMultiContainerEvent(t *testing.T) {
 			// Check that stopped and destroyed containers return error.
 			if err := containers[1].Destroy(); err != nil {
 				t.Fatalf("container.Destroy: %v", err)
+			}
+			if name == "enableCgroups" {
+				file := control.CgroupControlFile{Controller: "cpuacct", Path: "/" + containers[1].ID, Name: "cpuacct.usage"}
+				if _, err := containers[0].Sandbox.CgroupsReadControlFile(file); err != nil {
+					t.Fatalf("reading retained v1 cgroup after Destroy: %v", err)
+				}
+				postDestroy, err := containers[0].Event()
+				if err != nil {
+					t.Fatalf("Event after Destroy: %v", err)
+				}
+				if _, ok := postDestroy.ContainerUsage[containers[1].ID]; ok {
+					t.Fatalf("destroyed container %q reappeared in CPU accounting: %v", containers[1].ID, postDestroy.ContainerUsage)
+				}
 			}
 			for _, cont := range containers[1:] {
 				if _, err := cont.Event(); err == nil {
