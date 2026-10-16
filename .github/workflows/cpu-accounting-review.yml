@@ -76,14 +76,18 @@ jobs:
       - name: Go generation and build without background Git GC
         if: always()
         env:
-          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_COUNT: "2"
           GIT_CONFIG_KEY_0: gc.auto
           GIT_CONFIG_VALUE_0: "0"
+          GIT_CONFIG_KEY_1: safe.directory
+          GIT_CONFIG_VALUE_1: ${{ github.workspace }}
         run: |
-          tools/go_branch.sh
-          git checkout go
-          git clean -xf .
-          go build ./...
+          sudo --preserve-env=PATH,GIT_CONFIG_COUNT,GIT_CONFIG_KEY_0,GIT_CONFIG_VALUE_0,GIT_CONFIG_KEY_1,GIT_CONFIG_VALUE_1 bash -eu -c '
+            tools/go_branch.sh
+            git checkout go
+            git clean -xf .
+            go build ./...
+          '
       - name: Publish result
         if: always()
         run: |
