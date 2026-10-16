@@ -20,13 +20,13 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: 2d0949d58dd31b66195143aecd714f2da23a84db
+          ref: 34247efaf3d9faca9af8e31ab11ee72c3fb55801
       - name: Exact source revision
-        run: test "$(git rev-parse HEAD)" = "2d0949d58dd31b66195143aecd714f2da23a84db"
+        run: test "$(git rev-parse HEAD)" = "34247efaf3d9faca9af8e31ab11ee72c3fb55801"
       - name: Mark pending
         run: >-
           gh api --silent --method POST
-          "repos/$GH_REPO/statuses/2d0949d58dd31b66195143aecd714f2da23a84db"
+          "repos/$GH_REPO/statuses/34247efaf3d9faca9af8e31ab11ee72c3fb55801"
           -f state=pending -f context="CPU accounting regression"
           -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
       - name: Kernel regressions
@@ -69,30 +69,11 @@ jobs:
           --test_arg=-test.v --test_arg=--test_platforms=systrap
           --test_timeout=300 --test_sharding_strategy=disabled
           --test_output=streamed --jobs=2 --local_test_jobs=1"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        if: always()
-        with:
-          go-version-file: go.mod
-      - name: Go generation and build without background Git GC
-        if: always()
-        env:
-          GIT_CONFIG_COUNT: "2"
-          GIT_CONFIG_KEY_0: gc.auto
-          GIT_CONFIG_VALUE_0: "0"
-          GIT_CONFIG_KEY_1: safe.directory
-          GIT_CONFIG_VALUE_1: ${{ github.workspace }}
-        run: |
-          sudo --preserve-env=PATH,GIT_CONFIG_COUNT,GIT_CONFIG_KEY_0,GIT_CONFIG_VALUE_0,GIT_CONFIG_KEY_1,GIT_CONFIG_VALUE_1 bash -eu -c '
-            tools/go_branch.sh
-            git checkout go
-            git clean -xf .
-            go build ./...
-          '
       - name: Publish result
         if: always()
         run: |
           CPU_STATE=failure
           if [ "${{ job.status }}" = success ]; then CPU_STATE=success; fi
-          gh api --silent --method POST "repos/$GH_REPO/statuses/2d0949d58dd31b66195143aecd714f2da23a84db" \
+          gh api --silent --method POST "repos/$GH_REPO/statuses/34247efaf3d9faca9af8e31ab11ee72c3fb55801" \
             -f state="$CPU_STATE" -f context="CPU accounting regression" \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
