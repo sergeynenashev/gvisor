@@ -216,7 +216,11 @@ func (cm *containerManager) cpuStats(args *EventArgs, out *EventOut) error {
 		cm.l.saveMu.Unlock()
 		// Destroy may wait for task exit under mu; leave saveMu available.
 		cm.l.mu.Lock()
+		_, err := cm.l.tryThreadGroupFromIDLocked(execID{cid: args.CID})
 		cm.l.mu.Unlock()
+		if err != nil {
+			return err
+		}
 	}
 	defer cm.l.saveMu.Unlock()
 	_, err := cm.l.tryThreadGroupFromIDLocked(execID{cid: args.CID}) // +checklocksforce: mu.TryLock succeeded above.
