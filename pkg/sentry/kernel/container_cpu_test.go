@@ -350,3 +350,15 @@ func TestContainerCPUFallbackAfterRestoreAndRetirement(t *testing.T) {
 		t.Errorf("retired cgroup history leaked into a new lifetime: %v, want new=7", guest)
 	}
 }
+
+func TestContainerCPURetirementIncludesUnallocatedCgroupSample(t *testing.T) {
+	k := &Kernel{}
+	k.containerCPU.lifetime = map[string]uint64{"old": 10}
+	guest := k.ContainerCPUUsageWithFallback(map[string]uint64{"old": 50, "app": 50}, nil)
+	k.AccountContainerCPU(guest, "cgroup", 0, false, true)
+	k.RetireContainerCPU("old")
+	got := k.AccountContainerCPU(map[string]uint64{"app": 50}, "cgroup", 100, true, true)
+	if got["app"] != 50 || k.containerCPU.retiredAllocated != 50 {
+		t.Fatalf("allocation=%v retired=%d, want app=50 retired=50", got, k.containerCPU.retiredAllocated)
+	}
+}

@@ -137,10 +137,6 @@ func (cm *containerManager) getUsageFromCgroups(file control.CgroupControlFile) 
 
 // Event gets the events from the container.
 func (cm *containerManager) Event(args *EventArgs, out *EventOut) error {
-	// Cgroup reads update filesystem refs that checkpoint serializes.
-	cm.l.saveMu.Lock()
-	defer cm.l.saveMu.Unlock()
-
 	cid := &args.CID
 	*out = EventOut{
 		Event: Event{
@@ -176,7 +172,10 @@ func (cm *containerManager) Event(args *EventArgs, out *EventOut) error {
 	if cm.l.k.Cgroup2FS().EverMounted() {
 		memFile.Name = "memory.current"
 	}
+	// Cgroup reads update filesystem refs that checkpoint serializes.
+	cm.l.saveMu.Lock()
 	memUsage, err := cm.getUsageFromCgroups(memFile)
+	cm.l.saveMu.Unlock()
 	if err != nil {
 		// Cgroups is not installed or there was an error to get usage
 		// from the cgroups. Fall back to the old method of getting the
@@ -207,11 +206,24 @@ func (cm *containerManager) Event(args *EventArgs, out *EventOut) error {
 }
 
 func (cm *containerManager) cpuStats(args *EventArgs, out *EventOut) error {
-	var err error
 	// Keep the guest snapshot and host allocation in the same container
 	// lifecycle window. Destroy retires CPU accounting under l.mu.
-	cm.l.mu.Lock()
+	for {
+		cm.l.saveMu.Lock()
+		if cm.l.mu.TryLock() {
+			break
+		}
+		cm.l.saveMu.Unlock()
+		// Destroy may wait for task exit under mu; leave saveMu available.
+		cm.l.mu.Lock()
+		cm.l.mu.Unlock()
+	}
+	defer cm.l.saveMu.Unlock()
+	_, err := cm.l.tryThreadGroupFromIDLocked(execID{cid: args.CID}) // +checklocksforce: mu.TryLock succeeded above.
 	defer cm.l.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	out.ContainerUsage, err = cm.getCPUUsageFromCgroupsLocked()
 	source := "cgroup"
 	if err != nil {
@@ -250,10 +262,9 @@ func (cm *containerManager) getCPUUsageFromCgroupsLocked() (map[string]uint64, e
 		}
 		valStr, err := cm.readControlFile(file)
 		if err != nil {
-			// Use sentry accounting for containers whose cgroup cannot be
-			// read, e.g. the CRI pause container, which does not mount
-			// cgroups. Sentry retains usage after thread groups exit.
-			log.Debugf("could not get container %q cpu usage from cgroups, using sentry accounting, error: %v", cid, err)
+			// Keep the cgroup clock after a transient failure. Containers
+			// without a prior cgroup sample use retained sentry CPU.
+			log.Debugf("could not get container %q cpu usage from cgroups, retaining its previous cgroup sample or sentry usage: %v", cid, err)
 			missing = append(missing, cid)
 			continue
 		}

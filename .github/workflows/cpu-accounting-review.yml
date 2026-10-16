@@ -4,9 +4,13 @@ name: CPU accounting regression
     branches: ["ci/cpu-accounting-review"]
 permissions:
   contents: read
+  statuses: write
 concurrency:
   group: cpu-accounting-review
   cancel-in-progress: true
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
 jobs:
   regression:
     runs-on: ubuntu-latest
@@ -15,6 +19,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          ref: 0a5bb626d3d6921ae05dd57e1bb78d602980191c
+      - name: Exact source revision
+        run: test "$(git rev-parse HEAD)" = "0a5bb626d3d6921ae05dd57e1bb78d602980191c"
+      - name: Mark pending
+        run: >-
+          gh api --silent --method POST
+          "repos/$GH_REPO/statuses/0a5bb626d3d6921ae05dd57e1bb78d602980191c"
+          -f state=pending -f context="CPU accounting regression"
+          -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
       - name: Kernel regressions
         run: >-
           sudo make test
@@ -30,3 +43,35 @@ jobs:
           OPTIONS="--test_filter=TestEvent
           --test_arg=-test.v --test_timeout=180 --test_output=streamed
           --jobs=2 --local_test_jobs=1"
+      - name: Nogo for changed packages and their dependencies
+        if: always()
+        run: >-
+          sudo make test
+          TARGETS="//pkg/sentry/kernel:kernel_test_nogo //runsc/boot:boot_test_nogo //runsc/container:container_test_nogo"
+          OPTIONS="--test_timeout=300 --test_output=streamed --jobs=2 --local_test_jobs=1"
+      - name: Event integration including a real host cgroup
+        if: always()
+        run: >-
+          sudo make test
+          TARGETS="//runsc/container:container_test"
+          OPTIONS="--test_filter=TestMultiContainerEvent
+          --test_arg=-test.v --test_arg=--test_platforms=systrap
+          --test_timeout=300 --test_sharding_strategy=disabled
+          --test_output=streamed --jobs=2 --local_test_jobs=1"
+      - name: Checkpoint integration with concurrent Event
+        if: always()
+        run: >-
+          sudo make test
+          TARGETS="//runsc/container:container_test"
+          OPTIONS="--test_filter=TestMultiContainerSharedVolumeCheckpointRestore
+          --test_arg=-test.v --test_arg=--test_platforms=systrap
+          --test_timeout=300 --test_sharding_strategy=disabled
+          --test_output=streamed --jobs=2 --local_test_jobs=1"
+      - name: Publish result
+        if: always()
+        run: |
+          CPU_STATE=failure
+          if [ "${{ job.status }}" = success ]; then CPU_STATE=success; fi
+          gh api --silent --method POST "repos/$GH_REPO/statuses/0a5bb626d3d6921ae05dd57e1bb78d602980191c" \
+            -f state="$CPU_STATE" -f context="CPU accounting regression" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
