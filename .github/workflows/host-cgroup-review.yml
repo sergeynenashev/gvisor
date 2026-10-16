@@ -1,0 +1,26 @@
+name: Host cgroup fixture regression
+"on":
+  push:
+    branches: ["ci/host-cgroup-red"]
+permissions:
+  contents: read
+jobs:
+  host-cgroup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Source revision
+        run: git rev-parse HEAD
+      - name: Require a configured and dedicated sandbox cgroup
+        run: >-
+          sudo make test
+          TARGETS="//runsc/container:container_test"
+          OPTIONS="--test_filter=TestMultiContainerEvent/enableCgroupsHost
+          --sandbox_writable_path=/sys/fs/cgroup
+          --test_arg=-test.v --test_arg=--test_platforms=systrap
+          --test_timeout=300 --test_sharding_strategy=disabled
+          --test_output=streamed --jobs=2 --local_test_jobs=1"
