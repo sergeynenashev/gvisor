@@ -2694,6 +2694,7 @@ func (k *Kernel) RestoreContainerMapping(containerIDs map[string]string) {
 	k.containerCPUMu.Lock()
 	k.containerCPU.lifetime = remapContainerCPUValues(k.containerCPU.lifetime, k.containerNames, containerIDs)
 	k.containerCPU.guestPrev = remapContainerCPUValues(k.containerCPU.guestPrev, k.containerNames, containerIDs)
+	k.containerCPU.cgroupPrev = remapContainerCPUValues(k.containerCPU.cgroupPrev, k.containerNames, containerIDs)
 	k.containerCPU.allocated = remapContainerCPUValues(k.containerCPU.allocated, k.containerNames, containerIDs)
 	k.containerCPUMu.Unlock()
 

@@ -2891,9 +2891,13 @@ func TestMultiContainerHomeEnvDir(t *testing.T) {
 }
 
 func TestMultiContainerEvent(t *testing.T) {
-	tests := []string{"enableCgroups", "enableCgroupsV2", "enableCgroupsMixedMounts", "enableCgroupsV2MixedMounts", "disableCgroups"}
+	tests := []string{"enableCgroups", "enableCgroupsV2", "enableCgroupsMixedMounts", "enableCgroupsV2MixedMounts", "disableCgroups", "enableCgroupsHost"}
 	for _, name := range tests {
 		t.Run(name, func(t *testing.T) {
+			host := name == "enableCgroupsHost"
+			if host && os.Geteuid() != 0 {
+				t.Skip("requires root to configure a sandbox host cgroup")
+			}
 			conf := testutil.TestConfig(t)
 			if name == "enableCgroupsV2" || name == "enableCgroupsV2MixedMounts" {
 				conf.InSandboxCgroup = config.InSandboxCgroupV2
@@ -2915,6 +2919,9 @@ func TestMultiContainerEvent(t *testing.T) {
 			// /bin/true can legitimately report zero CPU usage.
 			quick := []string{"/bin/sh", "-c", "i=0; while [ \"$i\" -lt 50000 ]; do i=$((i+1)); done"}
 			podSpecs, ids := createSpecs(sleep, busy, quick)
+			if host {
+				podSpecs[0].Linux.CgroupsPath = "/event-" + ids[0]
+			}
 			if name != "disableCgroups" {
 				mnt := specs.Mount{
 					Destination: "/sys/fs/cgroup",
@@ -2934,6 +2941,17 @@ func TestMultiContainerEvent(t *testing.T) {
 				t.Fatalf("error starting containers: %v", err)
 			}
 			defer cleanup()
+			if host {
+				cg, err := containers[0].Sandbox.NewCGroup()
+				if err != nil || cg == nil {
+					t.Fatalf("sandbox host cgroup is not configured: cgroup=%v, err=%v", cg, err)
+				}
+				usage, err := cg.CPUUsage()
+				if err != nil || usage == 0 {
+					t.Fatalf("sandbox host CPU is unreadable or zero: usage=%d, err=%v", usage, err)
+				}
+				t.Logf("host-backed Event: sandbox cgroup=%s, CPU=%d", cg.MakePath("cpuacct"), usage)
+			}
 
 			t.Logf("Running container sleep %s", containers[0].ID)
 			t.Logf("Running container busy %s", containers[1].ID)
@@ -3012,7 +3030,7 @@ func TestMultiContainerEvent(t *testing.T) {
 				if guest <= lastGuest || cpu < lastCPU {
 					t.Fatalf("exec %d lost CPU: guest %d -> %d, exposed %d -> %d", round, lastGuest, guest, lastCPU, cpu)
 				}
-				if name == "enableCgroups" {
+				if name == "enableCgroups" || host {
 					file := control.CgroupControlFile{Controller: "cpuacct", Path: "/" + containers[0].ID, Name: "cpuacct.usage"}
 					raw, err := containers[0].Sandbox.CgroupsReadControlFile(file)
 					if err != nil {
@@ -3062,7 +3080,7 @@ func TestMultiContainerEvent(t *testing.T) {
 			if err := containers[1].Destroy(); err != nil {
 				t.Fatalf("container.Destroy: %v", err)
 			}
-			if name == "enableCgroups" {
+			if name == "enableCgroups" || host {
 				file := control.CgroupControlFile{Controller: "cpuacct", Path: "/" + containers[1].ID, Name: "cpuacct.usage"}
 				if _, err := containers[0].Sandbox.CgroupsReadControlFile(file); err != nil {
 					t.Fatalf("reading retained v1 cgroup after Destroy: %v", err)

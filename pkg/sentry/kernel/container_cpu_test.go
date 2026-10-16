@@ -269,3 +269,96 @@ func TestContainerCPUAccounting(t *testing.T) {
 		}
 	})
 }
+
+func TestContainerCPUUnreadableCgroup(t *testing.T) {
+	for _, host := range []bool{false, true} {
+		name := "hostless"
+		if host {
+			name = "host-backed"
+		}
+		t.Run(name, func(t *testing.T) {
+			k := &Kernel{}
+			k.containerCPU.lifetime = map[string]uint64{"app": 10, "side": 10}
+			first := k.ContainerCPUUsageWithFallback(map[string]uint64{"app": 1000, "side": 1000}, nil)
+			k.AccountContainerCPU(first, "cgroup", 2000, true, host)
+			failed := k.ContainerCPUUsageWithFallback(map[string]uint64{"side": 1010}, []string{"app"})
+			if failed["app"] != 1000 {
+				t.Errorf("unreadable cgroup snapshot = %v, want app=1000", failed)
+			}
+			got := k.AccountContainerCPU(failed, "cgroup", 2010, true, host)
+			if got["app"] != 1000 || got["side"] != 1010 {
+				t.Errorf("failed-read allocation = %v, want app=1000 side=1010", got)
+			}
+			recovered := k.ContainerCPUUsageWithFallback(map[string]uint64{"app": 1010, "side": 1020}, nil)
+			got = k.AccountContainerCPU(recovered, "cgroup", 2030, true, host)
+			if got["app"] != 1010 || got["side"] != 1020 {
+				t.Errorf("recovery allocation = %v, want app=1010 side=1020", got)
+			}
+		})
+	}
+}
+
+func TestContainerCPUAlwaysSentryFallback(t *testing.T) {
+	k := &Kernel{}
+	k.containerCPU.lifetime = map[string]uint64{"pause": 1}
+	first := k.ContainerCPUUsageWithFallback(make(map[string]uint64), []string{"pause"})
+	k.AccountContainerCPU(first, "cgroup", 0, false, false)
+	k.containerCPU.lifetime["pause"] = 2
+	second := k.ContainerCPUUsageWithFallback(make(map[string]uint64), []string{"pause"})
+	got := k.AccountContainerCPU(second, "cgroup", 0, false, false)
+	if got["pause"] != 2 {
+		t.Fatalf("sentry-only container stopped accruing CPU: %v, want pause=2", got)
+	}
+}
+
+func TestContainerCPUFirstCgroupReadRebasesSentry(t *testing.T) {
+	k := &Kernel{}
+	k.containerCPU.lifetime = map[string]uint64{"app": 10}
+	first := k.ContainerCPUUsageWithFallback(make(map[string]uint64), []string{"app"})
+	k.AccountContainerCPU(first, "cgroup", 0, false, false)
+	for _, sample := range []struct{ value, want uint64 }{{1000, 10}, {1010, 20}} {
+		guest := k.ContainerCPUUsageWithFallback(map[string]uint64{"app": sample.value}, nil)
+		if got := k.AccountContainerCPU(guest, "cgroup", 0, false, false)["app"]; got != sample.want {
+			t.Errorf("cgroup=%d allocated=%d, want %d", sample.value, got, sample.want)
+		}
+	}
+}
+
+func TestContainerCPUFallbackAfterRestoreAndRetirement(t *testing.T) {
+	k := &Kernel{containerNames: map[string]string{"old": "workload"}}
+	k.containerCPU.lifetime = map[string]uint64{"old": 10}
+	guest := k.ContainerCPUUsageWithFallback(map[string]uint64{"old": 1000}, nil)
+	k.AccountContainerCPU(guest, "cgroup", 0, false, false)
+	var buf bytes.Buffer
+	if _, err := state.Save(context.Background(), &buf, &k.containerCPU); err != nil {
+		t.Fatal(err)
+	}
+	restored := &Kernel{containerNames: k.containerNames}
+	if _, err := state.Load(context.Background(), &buf, &restored.containerCPU); err != nil {
+		t.Fatal(err)
+	}
+	restored.afterLoad(context.Background())
+	restored.RestoreContainerMapping(map[string]string{"workload": "new"})
+	guest = restored.ContainerCPUUsageWithFallback(make(map[string]uint64), []string{"new"})
+	if guest["new"] != 1000 {
+		t.Errorf("restored cgroup fallback = %v, want new=1000", guest)
+	}
+	restored.RetireContainerCPU("new")
+	restored.containerCPU.lifetime["new"] = 7
+	guest = restored.ContainerCPUUsageWithFallback(make(map[string]uint64), []string{"new"})
+	if guest["new"] != 7 {
+		t.Errorf("retired cgroup history leaked into a new lifetime: %v, want new=7", guest)
+	}
+}
+
+func TestContainerCPURetirementIncludesUnallocatedCgroupSample(t *testing.T) {
+	k := &Kernel{}
+	k.containerCPU.lifetime = map[string]uint64{"old": 10}
+	guest := k.ContainerCPUUsageWithFallback(map[string]uint64{"old": 50, "app": 50}, nil)
+	k.AccountContainerCPU(guest, "cgroup", 0, false, true)
+	k.RetireContainerCPU("old")
+	got := k.AccountContainerCPU(map[string]uint64{"app": 50}, "cgroup", 100, true, true)
+	if got["app"] != 50 || k.containerCPU.retiredAllocated != 50 {
+		t.Fatalf("allocation=%v retired=%d, want app=50 retired=50", got, k.containerCPU.retiredAllocated)
+	}
+}

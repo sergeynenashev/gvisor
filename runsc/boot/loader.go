@@ -273,8 +273,8 @@ type Loader struct {
 
 	hostTHP HostTHP
 
-	// saveMu serializes save operations and Event observations. Saves can be
-	// requested concurrently:
+	// saveMu serializes save operations and Event cgroup/CPU snapshots.
+	// Saves can be requested concurrently:
 	// autosave in save-resume mode is triggered by any task executing the
 	// trigger syscall, and checkpoints may be requested concurrently via the
 	// control API. Overlapping saves race: post-save cleanup

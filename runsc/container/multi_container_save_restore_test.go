@@ -1410,9 +1410,8 @@ func TestMultiContainerSharedVolumeCheckpointRestore(t *testing.T) {
 		t.Fatalf("Error verifying shared volume sub-dir from sub-container 2 after restore, ws: %v, err: %v", ws, err)
 	}
 
-	// Run CPU work after restore and before the first restored Event.
-	// This catches CPU ticks accrued after Kernel.Start but before the
-	// restored guest baseline is observed.
+	// Without a sandbox host cgroup, the first restored Event must retain
+	// guest CPU accrued since Kernel.Start, including this warmup.
 	for i := 0; i < 16; i++ {
 		if ws, err := execute(conf, newConts[1], "/app", "fsTreeVerify", "--depth=1", "--file-per-level=1", "--file-size=10", "--target-dir=/shared/sub", "--seed=456"); err != nil || ws != 0 {
 			t.Fatalf("CPU warmup exec %d after restore: status=%v, err=%v", i, ws, err)

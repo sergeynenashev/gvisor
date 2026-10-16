@@ -22,6 +22,7 @@ type containerCPUAccounting struct {
 	lifetime         map[string]uint64
 	retiredGuest     uint64
 	guestPrev        map[string]uint64
+	cgroupPrev       map[string]uint64
 	retiredPrev      uint64
 	allocated        map[string]uint64
 	retiredAllocated uint64
@@ -61,6 +62,35 @@ func (k *Kernel) ContainerCPUUsage() map[string]uint64 {
 	return usage
 }
 
+// ContainerCPUUsageWithFallback fills unreadable cgroups with their last
+// successful sample, or task lifetime usage before the first cgroup sample.
+// guest contains only successful cgroup reads; missing contains unreadable IDs.
+func (k *Kernel) ContainerCPUUsageWithFallback(guest map[string]uint64, missing []string) map[string]uint64 {
+	k.containerCPUMu.Lock()
+	defer k.containerCPUMu.Unlock()
+	a := &k.containerCPU
+	if a.cgroupPrev == nil {
+		a.cgroupPrev = make(map[string]uint64)
+	}
+	for id, value := range guest {
+		if _, seen := a.cgroupPrev[id]; !seen {
+			if _, hadBaseline := a.guestPrev[id]; hadBaseline {
+				// The first cgroup sample cannot be compared with sentry CPU.
+				a.guestPrev[id] = value
+			}
+		}
+		a.cgroupPrev[id] = value
+	}
+	for _, id := range missing {
+		if value, ok := a.cgroupPrev[id]; ok {
+			guest[id] = value
+		} else if value, ok := a.lifetime[id]; ok {
+			guest[id] = value
+		}
+	}
+	return guest
+}
+
 // RetireContainerCPU keeps destroyed containers' history out of live peers'
 // host CPU allocation while bounding per-container state to live containers.
 func (k *Kernel) RetireContainerCPU(id string) {
@@ -71,11 +101,15 @@ func (k *Kernel) RetireContainerCPU(id string) {
 	if a.guestPrev[id] > guest {
 		guest = a.guestPrev[id]
 	}
+	if a.cgroupPrev[id] > guest {
+		guest = a.cgroupPrev[id]
+	}
 	a.retiredGuest += guest
 	a.retiredPrev += a.guestPrev[id]
 	a.retiredAllocated += a.allocated[id]
 	delete(a.lifetime, id)
 	delete(a.guestPrev, id)
+	delete(a.cgroupPrev, id)
 	delete(a.allocated, id)
 }
 
