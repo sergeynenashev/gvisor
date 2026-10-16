@@ -2920,6 +2920,9 @@ func TestMultiContainerEvent(t *testing.T) {
 			quick := []string{"/bin/sh", "-c", "i=0; while [ \"$i\" -lt 50000 ]; do i=$((i+1)); done"}
 			podSpecs, ids := createSpecs(sleep, busy, quick)
 			if host {
+				if podSpecs[0].Linux == nil {
+					podSpecs[0].Linux = &specs.Linux{}
+				}
 				podSpecs[0].Linux.CgroupsPath = "/event-" + ids[0]
 			}
 			if name != "disableCgroups" {

@@ -46,8 +46,9 @@ func TestEventReleasesSaveMuWhileWaitingForContainer(t *testing.T) {
 
 			checkpointDone := make(chan struct{})
 			go func() {
-				for i := 0; i < 32; i++ {
+				for i := 0; i < 32; {
 					l.saveMu.Lock()
+					i++
 					l.saveMu.Unlock()
 					runtime.Gosched()
 				}
