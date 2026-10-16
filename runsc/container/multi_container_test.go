@@ -2923,7 +2923,10 @@ func TestMultiContainerEvent(t *testing.T) {
 				if podSpecs[0].Linux == nil {
 					podSpecs[0].Linux = &specs.Linux{}
 				}
-				podSpecs[0].Linux.CgroupsPath = "/event-" + ids[0]
+				// Match a pod parent with the sandbox process in its child cgroup.
+				sandboxCgroup := "/event-" + ids[0]
+				podSpecs[0].Annotations[cgroupParentAnnotation] = sandboxCgroup
+				podSpecs[0].Linux.CgroupsPath = path.Join(sandboxCgroup, "sandbox")
 			}
 			if name != "disableCgroups" {
 				mnt := specs.Mount{
@@ -2945,9 +2948,15 @@ func TestMultiContainerEvent(t *testing.T) {
 			}
 			defer cleanup()
 			if host {
+				if containers[0].Sandbox.CgroupJSON.Cgroup == nil {
+					t.Fatal("sandbox host CPU accounting is not configured")
+				}
 				cg, err := containers[0].Sandbox.NewCGroup()
 				if err != nil || cg == nil {
 					t.Fatalf("sandbox host cgroup is not configured: cgroup=%v, err=%v", cg, err)
+				}
+				if got, want := cg.MakePath("cpuacct"), "/event-"+ids[0]; !strings.Contains(got, want) {
+					t.Fatalf("sandbox process CPU cgroup %q does not contain expected sandbox path %q", got, want)
 				}
 				usage, err := cg.CPUUsage()
 				if err != nil || usage == 0 {
