@@ -61,6 +61,18 @@ func (k *Kernel) ContainerCPUUsage() map[string]uint64 {
 	return usage
 }
 
+// ContainerCPUUsageWithFallback fills unreadable cgroups from task accounting.
+func (k *Kernel) ContainerCPUUsageWithFallback(guest map[string]uint64, missing []string) map[string]uint64 {
+	k.containerCPUMu.Lock()
+	defer k.containerCPUMu.Unlock()
+	for _, id := range missing {
+		if value, ok := k.containerCPU.lifetime[id]; ok {
+			guest[id] = value
+		}
+	}
+	return guest
+}
+
 // RetireContainerCPU keeps destroyed containers' history out of live peers'
 // host CPU allocation while bounding per-container state to live containers.
 func (k *Kernel) RetireContainerCPU(id string) {

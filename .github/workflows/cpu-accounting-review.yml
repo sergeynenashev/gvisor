@@ -1,0 +1,32 @@
+name: CPU accounting regression
+"on":
+  push:
+    branches: ["ci/cpu-accounting-review"]
+permissions:
+  contents: read
+concurrency:
+  group: cpu-accounting-review
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Kernel regressions
+        run: >-
+          sudo make test
+          TARGETS="//pkg/sentry/kernel:kernel_test"
+          OPTIONS="--test_filter=TestContainerCPU
+          --test_arg=-test.v --test_timeout=180 --test_output=streamed
+          --jobs=2 --local_test_jobs=1"
+      - name: Event regressions
+        if: always()
+        run: >-
+          sudo make test
+          TARGETS="//runsc/boot:boot_test"
+          OPTIONS="--test_filter=TestEvent
+          --test_arg=-test.v --test_timeout=180 --test_output=streamed
+          --jobs=2 --local_test_jobs=1"

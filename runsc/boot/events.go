@@ -203,6 +203,11 @@ func (cm *containerManager) Event(args *EventArgs, out *EventOut) error {
 	}
 	out.Event.Data.Memory.Usage.Usage = memUsage
 
+	return cm.cpuStats(args, out)
+}
+
+func (cm *containerManager) cpuStats(args *EventArgs, out *EventOut) error {
+	var err error
 	// Keep the guest snapshot and host allocation in the same container
 	// lifecycle window. Destroy retires CPU accounting under l.mu.
 	cm.l.mu.Lock()
@@ -218,7 +223,7 @@ func (cm *containerManager) Event(args *EventArgs, out *EventOut) error {
 		source = "sentry"
 	}
 	allocated := cm.l.k.AccountContainerCPU(out.ContainerUsage, source, args.HostCPU, args.HostValid, args.HostConfigured)
-	out.Event.Data.CPU.Usage.Total = allocated[*cid]
+	out.Event.Data.CPU.Usage.Total = allocated[args.CID]
 	return nil
 }
 
@@ -226,7 +231,7 @@ func (cm *containerManager) Event(args *EventArgs, out *EventOut) error {
 // +checklocks:cm.l.mu
 func (cm *containerManager) getCPUUsageFromCgroupsLocked() (map[string]uint64, error) {
 	usage := make(map[string]uint64)
-	sentryUsage := control.ContainerUsage(cm.l.k)
+	var missing []string
 
 	isV2 := cm.l.k.Cgroup2FS().EverMounted()
 	for _, cid := range cm.l.containerIDs {
@@ -249,9 +254,7 @@ func (cm *containerManager) getCPUUsageFromCgroupsLocked() (map[string]uint64, e
 			// read, e.g. the CRI pause container, which does not mount
 			// cgroups. Sentry retains usage after thread groups exit.
 			log.Debugf("could not get container %q cpu usage from cgroups, using sentry accounting, error: %v", cid, err)
-			if u, ok := sentryUsage[cid]; ok {
-				usage[cid] = u
-			}
+			missing = append(missing, cid)
 			continue
 		}
 		var cpuUsage uint64
@@ -275,5 +278,5 @@ func (cm *containerManager) getCPUUsageFromCgroupsLocked() (map[string]uint64, e
 		}
 		usage[cid] = cpuUsage
 	}
-	return usage, nil
+	return cm.l.k.ContainerCPUUsageWithFallback(usage, missing), nil
 }
