@@ -1,0 +1,248 @@
+{
+  "name": "CPU accounting master validation",
+  "on": {
+    "push": {
+      "branches": [
+        "ci/cpu-accounting-master"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read",
+    "statuses": "write"
+  },
+  "concurrency": {
+    "group": "cpu-accounting-master-validation",
+    "cancel-in-progress": true
+  },
+  "jobs": {
+    "regression": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 50,
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "fetch-depth": 0,
+            "ref": "c874c157a28af5eef23088e0d18e283155e6a683"
+          }
+        },
+        {
+          "name": "Exact source revision",
+          "run": "test \"$(git rev-parse HEAD)\" = \"c874c157a28af5eef23088e0d18e283155e6a683\""
+        },
+        {
+          "name": "Kernel CPU regressions",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nsudo make test TARGETS=\"//pkg/sentry/kernel:kernel_test\" OPTIONS=\"--test_filter=TestContainerCPU --test_arg=-test.v --test_timeout=300 --test_output=streamed --jobs=2 --local_test_jobs=1\" 2>&1 | tee reports/kernel.log"
+        },
+        {
+          "name": "Event lifecycle regressions",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nsudo make test TARGETS=\"//runsc/boot:boot_test\" OPTIONS=\"--test_filter=TestEvent --test_arg=-test.v --test_timeout=300 --test_output=streamed --jobs=2 --local_test_jobs=1\" 2>&1 | tee reports/event.log",
+          "if": "always()"
+        },
+        {
+          "name": "Nogo for changed packages",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nsudo make test TARGETS=\"//pkg/sentry/kernel:kernel_test_nogo //runsc/boot:boot_test_nogo //runsc/container:container_test_nogo\" OPTIONS=\"--test_arg=-test.v --test_timeout=300 --test_output=streamed --jobs=2 --local_test_jobs=1\" 2>&1 | tee reports/nogo.log",
+          "if": "always()"
+        },
+        {
+          "name": "Event integration and dedicated host cgroup",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nsudo make test TARGETS=\"//runsc/container:container_test\" OPTIONS=\"--test_filter=TestMultiContainerEvent --sandbox_writable_path=/sys/fs/cgroup --test_arg=--test_platforms=systrap --test_sharding_strategy=disabled --test_arg=-test.v --test_timeout=300 --test_output=streamed --jobs=2 --local_test_jobs=1\" 2>&1 | tee reports/integration.log",
+          "if": "always()"
+        },
+        {
+          "name": "Checkpoint with concurrent Event RPC",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nsudo make test TARGETS=\"//runsc/container:container_test\" OPTIONS=\"--test_filter=TestMultiContainerSharedVolumeCheckpointRestore --test_arg=--test_platforms=systrap --test_sharding_strategy=disabled --test_arg=-test.v --test_timeout=300 --test_output=streamed --jobs=2 --local_test_jobs=1\" 2>&1 | tee reports/checkpoint.log",
+          "if": "always()"
+        },
+        {
+          "name": "Verify regression execution",
+          "shell": "bash",
+          "run": "set -euo pipefail\npython3 - <<'CHECK'\nfrom pathlib import Path\nimport re\nkernel=Path('reports/kernel.log').read_text()\nevent=Path('reports/event.log').read_text()\nintegration=Path('reports/integration.log').read_text()\ncheckpoint=Path('reports/checkpoint.log').read_text()\nassert '--- PASS: TestContainerCPUAccounting' in kernel\nassert '--- PASS: TestEventCPURejectsRetiredContainer' in event\nfor variant in ['enableCgroups','enableCgroupsV2','enableCgroupsMixedMounts','enableCgroupsV2MixedMounts','disableCgroups','enableCgroupsHost']:\n assert f'--- PASS: TestMultiContainerEvent/{variant} ' in integration, variant\nassert 'host-backed Event: sandbox cgroup=' in integration and '/event-' in integration\nsamples=re.findall(r'Event RPCs during checkpoint: (\\d+) attempted, (\\d+) succeeded, (\\d+) rejected',checkpoint)\nassert samples and any(int(success)>0 for _,success,_ in samples), samples\nprint('All six Event variants, host cgroup and concurrent checkpoint Event executed')\nCHECK",
+          "if": "always()"
+        },
+        {
+          "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+          "if": "always()",
+          "with": {
+            "name": "cpu-regression-reports",
+            "path": "reports/",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "static": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 40,
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "fetch-depth": 0,
+            "ref": "c874c157a28af5eef23088e0d18e283155e6a683"
+          }
+        },
+        {
+          "name": "Exact source revision",
+          "run": "test \"$(git rev-parse HEAD)\" = \"c874c157a28af5eef23088e0d18e283155e6a683\""
+        },
+        {
+          "uses": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+          "with": {
+            "go-version-file": "go.mod"
+          }
+        },
+        {
+          "name": "Source lint",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmake lint"
+        },
+        {
+          "name": "C++ lint",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmake lint-cc",
+          "if": "always()"
+        },
+        {
+          "name": "Gazelle BUILD validation",
+          "shell": "bash",
+          "run": "set -euo pipefail\nbazel run //:gazelle_check",
+          "if": "always()"
+        },
+        {
+          "name": "License headers",
+          "shell": "bash",
+          "run": "set -euo pipefail\ntools/check_license_headers.sh f51a205a8f4afbc5ab41aded070df74951b081ea",
+          "if": "always()"
+        },
+        {
+          "name": "Formatting diff for review",
+          "shell": "bash",
+          "run": "set -euo pipefail\ngit diff --binary > /tmp/ci-format.patch",
+          "if": "always()"
+        },
+        {
+          "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+          "if": "always()",
+          "with": {
+            "name": "formatting-diff",
+            "path": "/tmp/ci-format.patch",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "go-generation": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 50,
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "fetch-depth": 0,
+            "ref": "c874c157a28af5eef23088e0d18e283155e6a683"
+          }
+        },
+        {
+          "name": "Exact source revision",
+          "run": "test \"$(git rev-parse HEAD)\" = \"c874c157a28af5eef23088e0d18e283155e6a683\""
+        },
+        {
+          "uses": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+          "with": {
+            "go-version-file": "go.mod"
+          }
+        },
+        {
+          "name": "Generate Go branch",
+          "shell": "bash",
+          "run": "set -euo pipefail\ntools/go_branch.sh"
+        },
+        {
+          "name": "Build generated Go branch",
+          "shell": "bash",
+          "run": "set -euo pipefail\ngit checkout go\ngit clean -xf .\ngo build ./..."
+        }
+      ]
+    },
+    "release": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 40,
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "fetch-depth": 0,
+            "ref": "c874c157a28af5eef23088e0d18e283155e6a683"
+          }
+        },
+        {
+          "name": "Exact source revision",
+          "run": "test \"$(git rev-parse HEAD)\" = \"c874c157a28af5eef23088e0d18e283155e6a683\""
+        },
+        {
+          "name": "Build exact-source release bundle",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p release-bundle\nmake copy TARGETS=//:release DESTINATION=release-bundle/ OPTIONS=\"--jobs=2\""
+        },
+        {
+          "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+          "if": "always()",
+          "with": {
+            "name": "exact-source-release",
+            "path": "release-bundle/",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "performance": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 60,
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "fetch-depth": 0,
+            "ref": "c874c157a28af5eef23088e0d18e283155e6a683"
+          }
+        },
+        {
+          "name": "Exact source revision",
+          "run": "test \"$(git rev-parse HEAD)\" = \"c874c157a28af5eef23088e0d18e283155e6a683\""
+        },
+        {
+          "uses": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+          "with": {
+            "go-version-file": "go.mod"
+          }
+        },
+        {
+          "name": "Before and after OCI lifecycle benchmarks",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nfor variant in before after; do\n  revision=f51a205a8f4afbc5ab41aded070df74951b081ea\n  if [ \"$variant\" = after ]; then revision=c874c157a28af5eef23088e0d18e283155e6a683; fi\n  git checkout --detach \"$revision\"\n  sudo make test TARGETS=\"//runsc/container:lifecycle_benchmark_test\" OPTIONS=\"--test_arg=-test.bench=BenchmarkOCI --test_arg=-test.run=NOT_A_TEST --test_arg=-test.benchtime=1x --test_arg=-test.count=16 --test_arg=--test_platforms=systrap --test_timeout=900 --test_sharding_strategy=disabled --nocache_test_results --test_output=streamed --jobs=2 --local_test_jobs=1\" 2>&1 | tee \"reports/$variant.log\"\n  sed -n '/^Benchmark/p' \"reports/$variant.log\" > \"reports/$variant.txt\"\n  test -s \"reports/$variant.txt\"\ndone\ngo install golang.org/x/perf/cmd/benchstat@latest\n\"$(go env GOPATH)/bin/benchstat\" reports/before.txt reports/after.txt | tee reports/benchstat.txt\ngo version -m \"$(go env GOPATH)/bin/benchstat\" > reports/benchstat-version.txt"
+        },
+        {
+          "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+          "if": "always()",
+          "with": {
+            "name": "oci-lifecycle-performance",
+            "path": "reports/",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    }
+  }
+}
