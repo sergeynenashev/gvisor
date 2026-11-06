@@ -1,0 +1,56 @@
+{
+  "name": "CPU accounting Go formatting",
+  "on": {
+    "push": {
+      "branches": [
+        "ci/cpu-accounting-format"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "format": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 10,
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "fetch-depth": 0,
+            "ref": "0ae5cbb341e0f7ac873aabf52485c351c65a014f"
+          }
+        },
+        {
+          "name": "Exact source revision",
+          "run": "test \"$(git rev-parse HEAD)\" = \"0ae5cbb341e0f7ac873aabf52485c351c65a014f\""
+        },
+        {
+          "uses": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+          "with": {
+            "go-version-file": "go.mod"
+          }
+        },
+        {
+          "name": "Format changed Go sources",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nfiles=$(git diff --name-only f51a205a8f4afbc5ab41aded070df74951b081ea HEAD -- '*.go')\nif [ -n \"$files\" ]; then\n  printf '%s\\n' \"$files\" | xargs gofmt -w\nfi\ngit diff --binary > reports/format.patch\ngit diff --stat | tee reports/format-stat.txt\n"
+        },
+        {
+          "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+          "if": "always()",
+          "with": {
+            "name": "go-format-patch",
+            "path": "reports/"
+          }
+        }
+      ]
+    }
+  },
+  "concurrency": {
+    "group": "cpu-accounting-format",
+    "cancel-in-progress": true
+  }
+}
