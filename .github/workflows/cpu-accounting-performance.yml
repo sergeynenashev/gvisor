@@ -1,0 +1,58 @@
+{
+  "name": "CPU accounting master performance",
+  "on": {
+    "push": {
+      "branches": [
+        "ci/cpu-accounting-master-performance"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "performance": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 60,
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "fetch-depth": 0,
+            "ref": "c874c157a28af5eef23088e0d18e283155e6a683"
+          }
+        },
+        {
+          "name": "Exact source revision",
+          "run": "test \"$(git rev-parse HEAD)\" = \"c874c157a28af5eef23088e0d18e283155e6a683\""
+        },
+        {
+          "uses": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+          "with": {
+            "go-version-file": "go.mod"
+          }
+        },
+        {
+          "name": "Prepare disposable runner host settings",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nuname -a > reports/runner.txt\nlscpu >> reports/runner.txt\nsudo python3 - <<'SETTINGS'\nfrom pathlib import Path\nfor name,value in [('/sys/kernel/mm/transparent_hugepage/shmem_enabled','advise'),('/sys/kernel/mm/transparent_hugepage/defrag','defer')]:\n p=Path(name)\n old=p.read_text().strip()\n p.write_text(value)\n new=p.read_text().strip()\n assert '['+value+']' in new, new\n print(name,old,'->',new)\nfor name,minimum in [('/proc/sys/vm/max_map_count',4194304),('/proc/sys/user/max_user_namespaces',256)]:\n p=Path(name)\n old=int(p.read_text())\n if old<minimum: p.write_text(str(minimum))\n new=int(p.read_text())\n assert new>=minimum\n print(name,old,'->',new)\nSETTINGS\n"
+        },
+        {
+          "name": "Before and after OCI lifecycle benchmarks",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir -p reports\nfor variant in before after; do\n  revision=f51a205a8f4afbc5ab41aded070df74951b081ea\n  if [ \"$variant\" = after ]; then revision=c874c157a28af5eef23088e0d18e283155e6a683; fi\n  git checkout --detach \"$revision\"\n  sudo make test TARGETS=\"//runsc/container:lifecycle_benchmark_test\" OPTIONS=\"--test_arg=-test.bench=BenchmarkOCI --test_arg=-test.run=NOT_A_TEST --test_arg=-test.benchtime=1x --test_arg=-test.count=16 --test_arg=--test_platforms=systrap --test_timeout=900 --test_sharding_strategy=disabled --nocache_test_results --test_output=streamed --jobs=2 --local_test_jobs=1\" 2>&1 | tee \"reports/$variant.log\"\n  sed -n '/^Benchmark/p' \"reports/$variant.log\" > \"reports/$variant.txt\"\n  test -s \"reports/$variant.txt\"\ndone\nGOTOOLCHAIN=auto go install golang.org/x/perf/cmd/benchstat@latest\n\"$(go env GOPATH)/bin/benchstat\" reports/before.txt reports/after.txt | tee reports/benchstat.txt\ngo version -m \"$(go env GOPATH)/bin/benchstat\" > reports/benchstat-version.txt"
+        },
+        {
+          "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+          "if": "always()",
+          "with": {
+            "name": "oci-lifecycle-performance",
+            "path": "reports/",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    }
+  }
+}
